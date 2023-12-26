@@ -607,5 +607,3 @@ Required:
 Optional:
 
 - `enabled` (Boolean)
-
-

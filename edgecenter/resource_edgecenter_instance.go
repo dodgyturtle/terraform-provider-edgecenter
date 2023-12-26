@@ -19,6 +19,7 @@ import (
 	edgecloud "github.com/Edge-Center/edgecentercloud-go"
 	"github.com/Edge-Center/edgecentercloud-go/edgecenter/instance/v1/instances"
 	"github.com/Edge-Center/edgecentercloud-go/edgecenter/instance/v1/types"
+	"github.com/Edge-Center/edgecentercloud-go/edgecenter/port/v1/ports"
 	"github.com/Edge-Center/edgecentercloud-go/edgecenter/task/v1/tasks"
 	edgecloudMeta "github.com/Edge-Center/edgecentercloud-go/edgecenter/utils/metadata"
 	"github.com/Edge-Center/edgecentercloud-go/edgecenter/volume/v1/volumes"
@@ -28,6 +29,7 @@ const (
 	InstanceDeleting        int = 1200
 	InstanceCreatingTimeout int = 1200
 	InstancePoint               = "instances"
+	PortsPoint                  = "ports"
 
 	InstanceVMStateActive  = "active"
 	InstanceVMStateStopped = "stopped"
@@ -222,6 +224,11 @@ func resourceInstance() *schema.Resource {
 							Type:     schema.TypeString,
 							Computed: true,
 							Optional: true,
+						},
+						"port_security_disabled": {
+							Type:     schema.TypeBool,
+							Optional: true,
+							Computed: true,
 						},
 					},
 				},
@@ -498,6 +505,61 @@ func resourceInstanceCreate(ctx context.Context, d *schema.ResourceData, m inter
 		return Instance, nil
 	},
 	)
+	if err != nil {
+		return diag.FromErr(err)
+	}
+	instanceID := InstanceID.(string)
+	interfacesListAPI, err := instances.ListInterfacesAll(clientV1, instanceID)
+	if err != nil {
+		return diag.FromErr(err)
+	}
+
+	portSecurityOptsListExtracted, err := extractPortSecurityOpts(ifs)
+	if err != nil {
+		return diag.FromErr(err)
+	}
+
+	var portSecurityOptsList []InstancePortSecurityOpts
+	for _, iFace := range interfacesListAPI {
+		if len(iFace.IPAssignments) == 0 {
+			continue
+		}
+
+		portID := iFace.PortID
+		for _, assignment := range iFace.IPAssignments {
+			subnetID := assignment.SubnetID
+			ipAddress := assignment.IPAddress.String()
+
+			var portSecurityDisabled bool
+			for _, interfaceExtracted := range portSecurityOptsListExtracted {
+				if interfaceExtracted.SubnetID == subnetID || interfaceExtracted.IPAddress == ipAddress || interfaceExtracted.PortID == portID {
+					portSecurityDisabled = interfaceExtracted.PortSecurityDisabled
+					break
+				}
+			}
+
+			var portSecOpts InstancePortSecurityOpts
+			portSecOpts.PortID = portID
+			portSecOpts.PortSecurityDisabled = portSecurityDisabled
+
+			portSecurityOptsList = append(portSecurityOptsList, portSecOpts)
+		}
+	}
+
+	if len(portSecurityOptsList) > 0 {
+		portsClientV1, err := CreateClient(provider, d, PortsPoint, VersionPointV1)
+		if err != nil {
+			return diag.FromErr(err)
+		}
+		for _, v := range portSecurityOptsList {
+			if v.PortSecurityDisabled {
+				if _, err := ports.DisablePortSecurity(portsClientV1, v.PortID).Extract(); err != nil {
+					return diag.FromErr(err)
+				}
+			}
+		}
+	}
+
 	log.Printf("[DEBUG] Instance id (%s)", InstanceID)
 	if err != nil {
 		return diag.FromErr(err)
@@ -620,6 +682,7 @@ func resourceInstanceRead(_ context.Context, d *schema.ResourceData, m interface
 			i["network_id"] = iFace.NetworkID
 			i["subnet_id"] = subnetID
 			i["port_id"] = portID
+			i["port_security_disabled"] = !iFace.PortSecurityEnabled
 			if interfaceOpts.FloatingIP != nil {
 				i["fip_source"] = interfaceOpts.FloatingIP.Source.String()
 				i["existing_fip_id"] = interfaceOpts.FloatingIP.ExistingFloatingID
@@ -798,6 +861,10 @@ func resourceInstanceUpdate(ctx context.Context, d *schema.ResourceData, m inter
 	}
 
 	if d.HasChange("interface") {
+		portsClientV1, err := CreateClient(provider, d, PortsPoint, VersionPointV1)
+		if err != nil {
+			return diag.FromErr(err)
+		}
 		iOldRaw, iNewRaw := d.GetChange("interface")
 		ifsOldSlice, ifsNewSlice := iOldRaw.([]interface{}), iNewRaw.([]interface{})
 		sort.Sort(instanceInterfaces(ifsOldSlice))
@@ -833,7 +900,7 @@ func resourceInstanceUpdate(ctx context.Context, d *schema.ResourceData, m inter
 					if err := detachInterfaceFromInstance(client, instanceID, iOld); err != nil {
 						return diag.FromErr(err)
 					}
-					if err := attachInterfaceToInstance(client, instanceID, iNew); err != nil {
+					if err := attachInterfaceToInstance(client, portsClientV1, instanceID, iNew); err != nil {
 						return diag.FromErr(err)
 					}
 				}
@@ -869,7 +936,7 @@ func resourceInstanceUpdate(ctx context.Context, d *schema.ResourceData, m inter
 					if err := detachInterfaceFromInstance(client, instanceID, iOld); err != nil {
 						return diag.FromErr(err)
 					}
-					if err := attachInterfaceToInstance(client, instanceID, iNew); err != nil {
+					if err := attachInterfaceToInstance(client, portsClientV1, instanceID, iNew); err != nil {
 						return diag.FromErr(err)
 					}
 				}
@@ -877,7 +944,7 @@ func resourceInstanceUpdate(ctx context.Context, d *schema.ResourceData, m inter
 
 			for _, item := range ifsNewSlice[len(ifsOldSlice):] {
 				iNew := item.(map[string]interface{})
-				if err := attachInterfaceToInstance(client, instanceID, iNew); err != nil {
+				if err := attachInterfaceToInstance(client, portsClientV1, instanceID, iNew); err != nil {
 					return diag.FromErr(err)
 				}
 			}
@@ -912,7 +979,7 @@ func resourceInstanceUpdate(ctx context.Context, d *schema.ResourceData, m inter
 					if err := detachInterfaceFromInstance(client, instanceID, iOld); err != nil {
 						return diag.FromErr(err)
 					}
-					if err := attachInterfaceToInstance(client, instanceID, iNew); err != nil {
+					if err := attachInterfaceToInstance(client, portsClientV1, instanceID, iNew); err != nil {
 						return diag.FromErr(err)
 					}
 				}

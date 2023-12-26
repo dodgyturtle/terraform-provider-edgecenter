@@ -15,6 +15,7 @@ import (
 	edgecloud "github.com/Edge-Center/edgecentercloud-go"
 	"github.com/Edge-Center/edgecentercloud-go/edgecenter/instance/v1/instances"
 	"github.com/Edge-Center/edgecentercloud-go/edgecenter/instance/v1/types"
+	"github.com/Edge-Center/edgecentercloud-go/edgecenter/port/v1/ports"
 	"github.com/Edge-Center/edgecentercloud-go/edgecenter/securitygroup/v1/securitygroups"
 	"github.com/Edge-Center/edgecentercloud-go/edgecenter/servergroup/v1/servergroups"
 	"github.com/Edge-Center/edgecentercloud-go/edgecenter/task/v1/tasks"
@@ -25,6 +26,13 @@ var instanceDecoderConfig = &mapstructure.DecoderConfig{
 }
 
 type instanceInterfaces []interface{}
+
+type InstancePortSecurityOpts struct {
+	PortID               string
+	PortSecurityDisabled bool
+	SubnetID             string
+	IPAddress            string
+}
 
 func (s instanceInterfaces) Len() int {
 	return len(s)
@@ -110,6 +118,32 @@ func extractInstanceInterfaceToListCreate(interfaces []interface{}) ([]instances
 	}
 
 	return interfaceInstanceCreateOptsList, nil
+}
+
+// extractPortSecurityOpts creates a list of InstancePortSecurityOpts objects from a list of interfaces.
+func extractPortSecurityOpts(interfaces []interface{}) ([]InstancePortSecurityOpts, error) {
+	portSecurityOptsList := make([]InstancePortSecurityOpts, 0)
+	for _, iFace := range interfaces {
+		iFaceMap := iFace.(map[string]interface{})
+
+		interfaceOpts, err := decodeInstanceInterfaceOpts(iFaceMap)
+		if err != nil {
+			return nil, err
+		}
+
+		portSecDisabled := iFaceMap["port_security_disabled"].(bool)
+
+		portSecurityOpts := InstancePortSecurityOpts{
+			PortID:               interfaceOpts.PortID,
+			PortSecurityDisabled: portSecDisabled,
+			SubnetID:             interfaceOpts.SubnetID,
+			IPAddress:            interfaceOpts.IPAddress,
+		}
+
+		portSecurityOptsList = append(portSecurityOptsList, portSecurityOpts)
+	}
+
+	return portSecurityOptsList, nil
 }
 
 // extractInstanceInterfaceToListRead creates a list of InterfaceOpts objects from a list of interfaces.
@@ -341,19 +375,20 @@ func detachInterfaceFromInstance(client *edgecloud.ServiceClient, instanceID str
 }
 
 // attachInterfaceToInstance attach interface to instance.
-func attachInterfaceToInstance(instanceClient *edgecloud.ServiceClient, instanceID string, iface map[string]interface{}) error {
+func attachInterfaceToInstance(instanceClient, portsClient *edgecloud.ServiceClient, instanceID string, iface map[string]interface{}) error {
 	iType := types.InterfaceType(iface["type"].(string))
 	opts := instances.InterfaceInstanceCreateOpts{
 		InterfaceOpts: instances.InterfaceOpts{Type: iType},
 	}
+	portID := iface["port_id"].(string)
 
-	switch iType { //nolint: exhaustive
+	switch iType { // nolint: exhaustive
 	case types.SubnetInterfaceType:
 		opts.SubnetID = iface["subnet_id"].(string)
 	case types.AnySubnetInterfaceType:
 		opts.NetworkID = iface["network_id"].(string)
 	case types.ReservedFixedIPType:
-		opts.PortID = iface["port_id"].(string)
+		opts.PortID = portID
 	}
 	opts.SecurityGroups = getSecurityGroupsIDs(iface["security_groups"].([]interface{}))
 
@@ -380,6 +415,43 @@ func attachInterfaceToInstance(instanceClient *edgecloud.ServiceClient, instance
 	})
 	if err != nil {
 		return err
+	}
+
+	interfacesListAPI, err := instances.ListInterfacesAll(instanceClient, instanceID)
+	if err != nil {
+		return err
+	}
+
+	portSecurityDisabled := iface["port_security_disabled"].(bool)
+
+LOOP:
+	for _, iFace := range interfacesListAPI {
+		if len(iFace.IPAssignments) == 0 {
+			continue
+		}
+
+		portID = iFace.PortID
+		for _, assignment := range iFace.IPAssignments {
+			subnetID := assignment.SubnetID
+			ipAddress := assignment.IPAddress.String()
+
+			if opts.SubnetID == subnetID || opts.IPAddress == ipAddress || opts.PortID == portID {
+				if !iFace.PortSecurityEnabled != portSecurityDisabled {
+					switch portSecurityDisabled {
+					case true:
+						if _, err := ports.DisablePortSecurity(portsClient, portID).Extract(); err != nil {
+							return err
+						}
+					case false:
+						if _, err := ports.EnablePortSecurity(portsClient, portID).Extract(); err != nil {
+							return err
+						}
+					}
+				}
+
+				break LOOP
+			}
+		}
 	}
 
 	return nil
@@ -511,7 +583,7 @@ func getSecurityGroupsIDs(sgsRaw []interface{}) []edgecloud.ItemID {
 }
 
 // getSecurityGroupsDifference finds the difference between two slices of edgecloud.ItemID.
-func getSecurityGroupsDifference(sl1, sl2 []edgecloud.ItemID) (diff []edgecloud.ItemID) { //nolint: nonamedreturns
+func getSecurityGroupsDifference(sl1, sl2 []edgecloud.ItemID) (diff []edgecloud.ItemID) { // nolint: nonamedreturns
 	set := make(map[string]bool)
 	for _, item := range sl1 {
 		set[item.ID] = true
