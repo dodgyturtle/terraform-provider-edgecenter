@@ -12,6 +12,7 @@ terraform.tfstate
 ### bin
 bin/
 .local.env
+edgecenter/test/.env
 
 ### other
 local-files
