@@ -380,7 +380,6 @@ func attachInterfaceToInstance(instanceClient, portsClient *edgecloud.ServiceCli
 	opts := instances.InterfaceInstanceCreateOpts{
 		InterfaceOpts: instances.InterfaceOpts{Type: iType},
 	}
-	portID := iface["port_id"].(string)
 
 	switch iType { // nolint: exhaustive
 	case types.SubnetInterfaceType:
@@ -388,7 +387,7 @@ func attachInterfaceToInstance(instanceClient, portsClient *edgecloud.ServiceCli
 	case types.AnySubnetInterfaceType:
 		opts.NetworkID = iface["network_id"].(string)
 	case types.ReservedFixedIPType:
-		opts.PortID = portID
+		opts.PortID = iface["port_id"].(string)
 	}
 	opts.SecurityGroups = getSecurityGroupsIDs(iface["security_groups"].([]interface{}))
 
@@ -417,12 +416,25 @@ func attachInterfaceToInstance(instanceClient, portsClient *edgecloud.ServiceCli
 		return err
 	}
 
+	if err = adjustPortSecurityDisabledOpt(instanceClient, portsClient, instanceID, iface); err != nil {
+		return fmt.Errorf("cannot adjust port_security_disabled opt: %+v. Error: %w", iface, err)
+	}
+
+	return nil
+}
+
+// adjustPortSecurityDisabledOpt aligns the state of the interface (port_security_disabled) with what is specified in the
+// iface["port_security_disabled"].
+func adjustPortSecurityDisabledOpt(instanceClient, portsClient *edgecloud.ServiceClient, instanceID string, iface map[string]interface{}) error {
 	interfacesListAPI, err := instances.ListInterfacesAll(instanceClient, instanceID)
 	if err != nil {
 		return err
 	}
 
 	portSecurityDisabled := iface["port_security_disabled"].(bool)
+	IPAddress := iface["ip_address"].(string)
+	subnetID := iface["subnet_id"].(string)
+	ifacePortID := iface["port_id"].(string)
 
 LOOP:
 	for _, iFace := range interfacesListAPI {
@@ -430,20 +442,20 @@ LOOP:
 			continue
 		}
 
-		portID = iFace.PortID
+		requestedIfacePortID := iFace.PortID
 		for _, assignment := range iFace.IPAssignments {
-			subnetID := assignment.SubnetID
-			ipAddress := assignment.IPAddress.String()
+			requestedIfaceSubnetID := assignment.SubnetID
+			requestedIfaceIPAddress := assignment.IPAddress.String()
 
-			if opts.SubnetID == subnetID || opts.IPAddress == ipAddress || opts.PortID == portID {
+			if subnetID == requestedIfaceSubnetID || IPAddress == requestedIfaceIPAddress || ifacePortID == requestedIfacePortID {
 				if !iFace.PortSecurityEnabled != portSecurityDisabled {
 					switch portSecurityDisabled {
 					case true:
-						if _, err := ports.DisablePortSecurity(portsClient, portID).Extract(); err != nil {
+						if _, err := ports.DisablePortSecurity(portsClient, requestedIfacePortID).Extract(); err != nil {
 							return err
 						}
 					case false:
-						if _, err := ports.EnablePortSecurity(portsClient, portID).Extract(); err != nil {
+						if _, err := ports.EnablePortSecurity(portsClient, requestedIfacePortID).Extract(); err != nil {
 							return err
 						}
 					}
