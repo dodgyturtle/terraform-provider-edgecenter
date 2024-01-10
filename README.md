@@ -24,7 +24,7 @@ Using the provider
 ```shell
 $ touch ~/.terraformrc
 ```
-For using terraform without VPN, you should configure mirror:
+For using terraform without VPN, you should configure mirror in `~/.terraformrc` file:
 
 ```terraform
 provider_installation {
@@ -47,7 +47,7 @@ provider_installation {
 It is necessary to add provider settings according to the instructions https://developer.hashicorp.com/terraform/language/providers/requirements:
 Each Terraform module must declare which providers it requires, so that Terraform can install and use them.
 
-To use the provider, prepare configuration file provider.tf in module directory
+To use the provider, prepare configuration file `provider.tf` in module directory
 
 ```terraform
 terraform {
@@ -56,7 +56,7 @@ terraform {
   required_providers {
     edgecenter = {
        source = "Edge-Center/edgecenter"
-       version = "{version_number}"  # need to specify
+       version = "{version_number}"  # need to specify (choose from https://github.com/Edge-Center/terraform-provider-edgecenter/releases)
     }
   }
 }
@@ -65,7 +65,7 @@ terraform {
 provider edgecenter {
   edgecenter_platform_api = "https://api.edgecenter.ru/iam"
   edgecenter_cloud_api = "https://api.edgecenter.ru/cloud"
-  permanent_api_token = "{your_permanent_token}" # need to specify
+  permanent_api_token = "{your_permanent_token}" # need to specify (you can create it on the page https://accounts.edgecenter.ru/profile/api-tokens)
 }
 ```
 #### Initialize working directory
@@ -93,8 +93,14 @@ Development
 
 ### Initialization of the project
 
-Before initializing the project you should to set VAULT_ADDR and VAULT_TOKEN envs.
-
+#### Setting Vault envs
+Before initializing the project you should to set VAULT_ADDR and VAULT_TOKEN envs:
+```bash
+export VAULT_ADDR=<you can ask address from Cloud team (matermost tag: @devcloud)>
+export VAULT_TOKEN=<you can generate this token in ${VAULT_ADDR} page>
+```
+#### Initialize
+Initialize the project this command:
 ```sh
 $ make init
 ```
