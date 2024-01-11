@@ -3,6 +3,8 @@ package edgecenter
 import (
 	"context"
 	"fmt"
+	"github.com/Edge-Center/edgecentercloud-go/edgecenter/floatingip/v1/floatingips"
+	edgecloudV2 "github.com/Edge-Center/edgecentercloud-go/v2"
 	"log"
 	"net"
 
@@ -10,7 +12,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 
-	"github.com/Edge-Center/edgecentercloud-go/edgecenter/floatingip/v1/floatingips"
 	"github.com/Edge-Center/edgecentercloud-go/edgecenter/utils"
 )
 
@@ -117,16 +118,14 @@ allowing it to have a static public IP address. The floating IP can be re-associ
 	}
 }
 
-func dataSourceFloatingIPRead(_ context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
+func dataSourceFloatingIPRead(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
 	log.Println("[DEBUG] Start FloatingIP reading")
 	var diags diag.Diagnostics
 	config := m.(*Config)
-	provider := config.Provider
+	clientV2 := config.CloudClient
 
-	client, err := CreateClient(provider, d, FloatingIPsPoint, VersionPointV1)
-	if err != nil {
-		return diag.FromErr(err)
-	}
+	clientV2.Region = d.Get("region_id").(int)
+	clientV2.Project = d.Get("project_id").(int)
 
 	ipAddr := d.Get("floating_ip_address").(string)
 	metaOpts := &floatingips.ListOpts{}
@@ -143,15 +142,16 @@ func dataSourceFloatingIPRead(_ context.Context, d *schema.ResourceData, m inter
 		metaOpts.MetadataKV = meta
 	}
 
-	ips, err := floatingips.ListAll(client, *metaOpts)
+	ips, _, err := clientV2.Floatingips.List(ctx)
+
 	if err != nil {
 		return diag.FromErr(err)
 	}
 
 	var found bool
-	var floatingIP floatingips.FloatingIPDetail
+	var floatingIP edgecloudV2.FloatingIP
 	for _, ip := range ips {
-		if ip.FloatingIPAddress.String() == ipAddr {
+		if ip.FloatingIPAddress == ipAddr {
 			floatingIP = ip
 			found = true
 			break
@@ -174,12 +174,12 @@ func dataSourceFloatingIPRead(_ context.Context, d *schema.ResourceData, m inter
 	d.Set("status", floatingIP.Status)
 	d.Set("port_id", floatingIP.PortID)
 	d.Set("router_id", floatingIP.RouterID)
-	d.Set("floating_ip_address", floatingIP.FloatingIPAddress.String())
+	d.Set("floating_ip_address", floatingIP.FloatingIPAddress)
 
-	metadataReadOnly := PrepareMetadataReadonly(floatingIP.Metadata)
-	if err := d.Set("metadata_read_only", metadataReadOnly); err != nil {
-		return diag.FromErr(err)
-	}
+	// metadataReadOnly := PrepareMetadataReadonly(floatingIP.Metadata)
+	// if err := d.Set("metadata_read_only", metadataReadOnly); err != nil {
+	// 	return diag.FromErr(err)
+	// }
 
 	log.Println("[DEBUG] Finish FloatingIP reading")
 
