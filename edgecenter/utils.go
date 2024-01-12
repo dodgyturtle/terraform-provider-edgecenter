@@ -15,6 +15,7 @@ import (
 	cdn "github.com/Edge-Center/edgecentercdn-go"
 	edgecloud "github.com/Edge-Center/edgecentercloud-go"
 	"github.com/Edge-Center/edgecentercloud-go/edgecenter"
+	edgecloudV2 "github.com/Edge-Center/edgecentercloud-go/v2"
 )
 
 const (
@@ -27,6 +28,7 @@ const (
 
 type Config struct {
 	Provider      *edgecloud.ProviderClient
+	CloudClient   *edgecloudV2.Client
 	CDNClient     cdn.ClientService
 	StorageClient *storageSDK.SDK
 	DNSClient     *dnsSDK.Client
@@ -79,7 +81,7 @@ func CreateClient(provider *edgecloud.ProviderClient, d *schema.ResourceData, en
 	rawRegionID := d.Get("region_id")
 	rawRegionName := d.Get("region_name")
 	if rawRegionID != nil && rawRegionName != nil {
-		regionID, err = GetRegion(provider, rawRegionID.(int), rawRegionName.(string))
+		//regionID, err = GetRegion(provider, rawRegionID.(int), rawRegionName.(string))
 		if err != nil {
 			return nil, fmt.Errorf("failed to get region: %w", err)
 		}
